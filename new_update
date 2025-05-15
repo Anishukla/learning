@@ -162,3 +162,18 @@ final_df.to_parquet('final_validated_prices.parquet', index=False)
 print("Validation completed successfully!")
 print(f"Total records processed: {len(final_df)}")
 print(f"Valid percentage: {final_df['validation_flag'].mean():.2%}")
+
+
+# Add in place of ct and ap
+if mechanic in ['ct', 'ap']:
+    # 1. Validate component first
+    comp_valid, _ = validate_component(mechanic, row['component'])
+    if not comp_valid:
+        validation_passed = False
+    
+    # 2. Validate price ending (NEW - now added to output)
+    price_valid, price_expected = is_valid_price_ending(row['offer_price'])
+    if price_valid:
+        valid_values.append(f"{price_expected:.2f}")  # This was missing
+    else:
+        validation_passed = False
