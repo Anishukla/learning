@@ -1,23 +1,64 @@
-# 1. Calculate ALL derived columns (we'll filter later)
-df['get_offer_price'] = (df['offer_price'] - df['buy_base_price']).round(2)
-df['depth_value'] = (df['offer_base_price'] - df['offer_price']).round(2)
-df['depth_per-off'] = np.where(
-    df['get_base_price'] == 0,
-    100,
-    ((df['get_base_price'] - df['get_offer_price']) / df['get_base_price'] * 100).round(2)
-)
+import pandas as pd
+import numpy as np
+import gc
 
-# 2. Simplified validation function
+# Load data with chunking if needed
+try:
+    df = pd.read_parquet('your_file_path.parquet')
+except MemoryError:
+    print("Processing in chunks...")
+    chunks = pd.read_parquet('your_file_path.parquet', chunksize=100000)
+    df = pd.concat(chunks)
+
+# Optimize data types to reduce memory usage
+def optimize_dtypes(df):
+    for col in df.select_dtypes(include=['float64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='float')
+    for col in df.select_dtypes(include=['int64']).columns:
+        df[col] = pd.to_numeric(df[col], downcast='integer')
+    return df
+
+df = optimize_dtypes(df)
+
+# Split ID column
+df[['dd', 'mechanic', 'component', 'setX', 'hashtag']] = df['idv_id'].str.split('_', expand=True)
+
+# Convert depth to percentage
+df['depth'] = (df['depth'] * 100).round(2)
+
+# Define validation functions
+def is_valid_price_ending(price):
+    fractional = round(price % 1, 2)
+    valid_endings = {0.00, 0.29, 0.39, 0.49, 0.50, 0.59, 0.69, 0.79, 0.99}
+    return fractional in valid_endings, fractional
+
+def is_valid_money_off(value):
+    fractional = round(value % 1, 2)
+    return fractional in {0.00, 0.50}, fractional
+
+def is_valid_percentage(value):
+    return value % 5 == 0, value
+
+def validate_component(mechanic, component):
+    if mechanic == 'ct':
+        return component.isdigit(), component
+    elif mechanic == 'ap':
+        return component == '0', component
+    elif mechanic in ['order_per-off', 'order_dollar-off']:
+        return component.isdigit(), component
+    return True, component
+
+# Main validation function with simplified output
 def validate_row(row):
     mechanic = row['mechanic']
     validation_passed = True
-    reason_true_false = []
+    valid_values = []
     
     # Price Ending Group A Validations
     if mechanic in ['atpp', 'mmmix', 'mmmatch', 'ct', 'ap']:
         valid, expected = is_valid_price_ending(row['offer_price'])
         if valid:
-            reason_true_false.append(f"{expected:.2f}")
+            valid_values.append(f"{expected:.2f}")
         else:
             validation_passed = False
     
@@ -25,7 +66,7 @@ def validate_row(row):
     if mechanic in ['bogomatch', 'bogomix', 'bg', 'satpp']:
         valid, expected = is_valid_price_ending(row['get_offer_price'])
         if valid:
-            reason_true_false.append(f"{expected:.2f}")
+            valid_values.append(f"{expected:.2f}")
         else:
             validation_passed = False
     
@@ -33,7 +74,7 @@ def validate_row(row):
     if mechanic in ['satdoff', 'dollar-off']:
         valid, expected = is_valid_money_off(row['depth_value'])
         if valid:
-            reason_true_false.append(f"{expected:.2f}")
+            valid_values.append(f"{expected:.2f}")
         else:
             validation_passed = False
     
@@ -42,7 +83,7 @@ def validate_row(row):
         field = 'depth_per-off' if 'per-off' in mechanic else 'depth'
         valid, expected = is_valid_percentage(row[field])
         if valid:
-            reason_true_false.append(f"{int(expected)}%")
+            valid_values.append(f"{int(expected)}%")
         else:
             validation_passed = False
     
@@ -60,35 +101,64 @@ def validate_row(row):
         if mechanic == 'order_per-off':
             valid, expected = is_valid_percentage(float(row['setX']))
             if valid:
-                reason_true_false.append(f"{int(expected)}%")
+                valid_values.append(f"{int(expected)}%")
         elif mechanic == 'order_dollar-off':
             valid, expected = is_valid_money_off(float(row['setX']))
             if valid:
-                reason_true_false.append(f"{expected:.2f}")
+                valid_values.append(f"{expected:.2f}")
     
     return pd.Series({
         'validation_flag': validation_passed,
-        'reason_true_false': ", ".join(reason_true_false) if reason_true_false else ""
+        'reason_true_false': ", ".join(valid_values) if valid_values else ""
     })
 
-# Apply validation
-validation_results = df.apply(validate_row, axis=1)
-df = pd.concat([df, validation_results], axis=1)
-
-# Filter derived columns for relevant mechanics only
-def filter_derived_values(row):
-    mechanic = row['mechanic']
+# Process derived columns only for relevant mechanics
+def process_derived_columns(df):
     bogo_mechs = ['bogomatch', 'bogomix', 'bg', 'satpp']
     money_mechs = ['satdoff', 'dollar-off']
     pct_mechs = ['bogomix_per-off', 'bogomatch_per-off', 'bg_per-off', 'per-off']
     
-    if mechanic not in bogo_mechs: row['get_offer_price'] = None
-    if mechanic not in money_mechs: row['depth_value'] = None
-    if mechanic not in pct_mechs: row['depth_per-off'] = None
-    return row
+    # Calculate only when needed
+    mask = df['mechanic'].isin(bogo_mechs)
+    df['get_offer_price'] = np.where(mask, (df['offer_price'] - df['buy_base_price']).round(2), np.nan)
+    
+    mask = df['mechanic'].isin(money_mechs)
+    df['depth_value'] = np.where(mask, (df['offer_base_price'] - df['offer_price']).round(2), np.nan)
+    
+    mask = df['mechanic'].isin(pct_mechs)
+    df['depth_per-off'] = np.where(
+        mask,
+        np.where(
+            df['get_base_price'] == 0,
+            100,
+            ((df['get_base_price'] - df['get_offer_price']) / df['get_base_price'] * 100).round(2)
+        ),
+        np.nan
+    )
+    return df
 
-df = df.apply(filter_derived_values, axis=1)
+df = process_derived_columns(df)
 
-# Clean up and save
-df = df.drop(columns=['dd', 'mechanic', 'component', 'setX', 'hashtag'], errors='ignore')
-df.to_parquet('final_validated_prices.parquet', index=False)
+# Validate in batches to avoid memory overload
+def validate_in_batches(df, batch_size=100000):
+    results = []
+    for i in range(0, len(df), batch_size):
+        batch = df.iloc[i:i+batch_size].copy()
+        validation_results = batch.apply(validate_row, axis=1)
+        results.append(pd.concat([batch, validation_results], axis=1))
+        del batch, validation_results  # Clean up
+        gc.collect()
+    return pd.concat(results)
+
+# Run validation
+final_df = validate_in_batches(df)
+
+# Clean up temporary columns
+final_df = final_df.drop(columns=['dd', 'mechanic', 'component', 'setX', 'hashtag'], errors='ignore')
+
+# Save results
+final_df.to_parquet('final_validated_prices.parquet', index=False)
+
+print("Validation completed successfully!")
+print(f"Total records processed: {len(final_df)}")
+print(f"Valid percentage: {final_df['validation_flag'].mean():.2%}")
