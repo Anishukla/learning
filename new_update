@@ -1,14 +1,31 @@
+""" Unique mecganiques
+array(['ct-3-0', 'ct-2-0', 'atpp', 'satpp', 'ap-0-0', 'ct-1-0', 'bogomix',
+       'ct-5-0', 'ap-0-1', 'mmmix', 'bogomatch', 'ct-10-0', 'ct-15-0',
+       'mmmatch', 'satdoff', 'per-off', 'dollar-off', 'ct-1-1',
+       'ct-1-1.49', 'ct-1-2', 'bg', 'ct-1-0.01', 'orderdisperoff-5-20',
+       'orderdisperoff-1-15', 'orderdisperoff-10-15', 'orderdis$off-5-1',
+       'orderdisperoff-2-20', 'orderdisperoff-3-15', 'orderdis$off-15-3',
+       'orderdisperoff-20-20', 'orderdisperoff-6-15',
+       'orderdisperoff-4-20', 'orderdis$off-10-2', 'orderdisperoff-5-30',
+       'orderdisperoff-5-28', 'nextorderperoff-0-50',
+       'orderdisperoff-5-15', 'orderdisperoff-7-20',
+       'orderdisperoff-10-20', 'orderdisperoff-3-20',
+       'orderdisperoff-6-20', 'orderdisperoff-11-20',
+       'orderdisperoff-8-20', 'orderdis$off-20-2', 'orderdisperoff-10-25',
+       'orderdisperoff-12-20', 'orderdis$off-5-3', 'orderdisperoff-1-25',
+       'orderdis$off-20-3', 'orderdisperoff-5-31', 'orderdis$off-12-2',
+       'orderdis$off-20-4', 'orderdisperoff-1-20', 'orderdis$off-16-8',
+       'orderdisperoff-15-20'], dtype=object)
+
+"""
+
+
 import pandas as pd
 import numpy as np
 import gc
 
 # Load data with chunking if needed
-try:
-    df = pd.read_parquet('your_file_path.parquet')
-except MemoryError:
-    print("Processing in chunks...")
-    chunks = pd.read_parquet('your_file_path.parquet', chunksize=100000)
-    df = pd.concat(chunks)
+df = pd.read_parquet('G:/Shared drives/MCD_Discount Engine 1/Capability/5. Workspaces/kishore/price_ending.parquet')
 
 # Optimize data types to reduce memory usage
 def optimize_dtypes(df):
@@ -24,7 +41,8 @@ df = optimize_dtypes(df)
 df[['dd', 'mechanic', 'component', 'setX', 'hashtag']] = df['idv_id'].str.split('_', expand=True)
 
 # Convert depth to percentage
-df['depth'] = (df['depth'] * 100).round(2)
+df['depth'] = df['depth'].round(2)
+df['depth'] = df['depth']*100
 
 # Define validation functions
 def is_valid_price_ending(price):
@@ -44,13 +62,15 @@ def validate_component(mechanic, component):
         return component.isdigit(), component
     elif mechanic == 'ap':
         return component == '0', component
-    elif mechanic in ['order_per-off', 'order_dollar-off']:
+    elif mechanic in ['orderdisperoff', 'orderdis$off']:
         return component.isdigit(), component
     return True, component
 
+df['base_mechanic'] = df['mechanic'].str.split('-').str[0]
+
 # Main validation function with simplified output
 def validate_row(row):
-    mechanic = row['mechanic']
+    mechanic = row['base_mechanic']
     validation_passed = True
     valid_values = []
     
@@ -94,15 +114,15 @@ def validate_row(row):
             validation_passed = False
     
     # Order Mechanic Validations
-    if mechanic in ['order_per-off', 'order_dollar-off']:
+    if mechanic in ['orderdisperoff', 'orderdis$off']:
         valid, expected = validate_component(mechanic, row['component'])
         if not valid:
             validation_passed = False
-        if mechanic == 'order_per-off':
+        if mechanic == 'orderdisperoff':
             valid, expected = is_valid_percentage(float(row['setX']))
             if valid:
                 valid_values.append(f"{int(expected)}%")
-        elif mechanic == 'order_dollar-off':
+        elif mechanic == 'orderdis$off':
             valid, expected = is_valid_money_off(float(row['setX']))
             if valid:
                 valid_values.append(f"{expected:.2f}")
@@ -162,18 +182,3 @@ final_df.to_parquet('final_validated_prices.parquet', index=False)
 print("Validation completed successfully!")
 print(f"Total records processed: {len(final_df)}")
 print(f"Valid percentage: {final_df['validation_flag'].mean():.2%}")
-
-
-# Add in place of ct and ap
-if mechanic in ['ct', 'ap']:
-    # 1. Validate component first
-    comp_valid, _ = validate_component(mechanic, row['component'])
-    if not comp_valid:
-        validation_passed = False
-    
-    # 2. Validate price ending (NEW - now added to output)
-    price_valid, price_expected = is_valid_price_ending(row['offer_price'])
-    if price_valid:
-        valid_values.append(f"{price_expected:.2f}")  # This was missing
-    else:
-        validation_passed = False
