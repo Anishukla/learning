@@ -1,3 +1,9 @@
+def clean_mechanic(mechanic_str):
+    base = mechanic_str.split('-')[0]
+    return base if base in ['ct', 'ap'] else mechanic_str
+
+df['mechanic_clean'] = df['mechanic'].apply(clean_mechanic)
+
 """ Unique mecganiques
 array(['ct-3-0', 'ct-2-0', 'atpp', 'satpp', 'ap-0-0', 'ct-1-0', 'bogomix',
        'ct-5-0', 'ap-0-1', 'mmmix', 'bogomatch', 'ct-10-0', 'ct-15-0',
