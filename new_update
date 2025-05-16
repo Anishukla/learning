@@ -1,3 +1,5 @@
+df['new_idv_id'] = df['idv_id'].apply(lambda x: re.sub(r'_#nso[^_]*', '', x).replace('#mop', ''))
+
 def clean_mechanic(mechanic_str):
     base = mechanic_str.split('-')[0]
     return base if base in ['ct', 'ap'] else mechanic_str
